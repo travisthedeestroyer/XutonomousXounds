@@ -397,13 +397,21 @@ export default function App() {
   const handleBeatUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+
+      // Reject oversized files — decoding large audio to raw PCM crashes mobile browsers
+      if (file.size > 50 * 1024 * 1024) {
+        alert('Beat file is too large (max 50MB). Please use a shorter or more compressed file.');
+        e.target.value = '';
+        return;
+      }
+
       if (beatUrl) URL.revokeObjectURL(beatUrl);
       setOriginalBeatBlob(file);
       setBeatBlob(file);
       const newUrl = URL.createObjectURL(file);
       setBeatUrl(newUrl);
       setStep('prepare');
-      
+
       // Analyze BPM
       setIsAnalyzingBpm(true);
       let bpmContext: AudioContext | null = null;
@@ -416,7 +424,13 @@ export default function App() {
         const audioBuffer = await bpmContext.decodeAudioData(arrayBuffer);
         setBeatBuffer(audioBuffer);
 
-        const bpmCandidates = await analyzeFullBuffer(audioBuffer);
+        // Analyze only the first 30s for BPM — running analyzeFullBuffer on the
+        // entire decoded buffer (can be 100MB+ of PCM) freezes and OOM-crashes mobile.
+        const maxSamples = Math.min(audioBuffer.length, 30 * audioBuffer.sampleRate);
+        const analysisBuffer = bpmContext.createBuffer(1, maxSamples, audioBuffer.sampleRate);
+        analysisBuffer.copyToChannel(audioBuffer.getChannelData(0).subarray(0, maxSamples), 0);
+
+        const bpmCandidates = await analyzeFullBuffer(analysisBuffer);
         if (bpmCandidates && bpmCandidates.length > 0) {
           // The first candidate is usually the most confident one
           setDetectedBpm(Math.round(bpmCandidates[0].tempo));
