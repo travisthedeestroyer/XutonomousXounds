@@ -1,4 +1,0 @@
-matchering>=2.0.6
-numpy>=1.24
-soundfile>=0.12
-scipy>=1.10
