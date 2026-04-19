@@ -1,0 +1,12 @@
+{
+  "framework": "vite",
+  "buildCommand": "vite build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/master.py": {
+      "runtime": "python3.12",
+      "memory": 1024,
+      "maxDuration": 300
+    }
+  }
+}
