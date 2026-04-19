@@ -4,9 +4,12 @@
   "outputDirectory": "dist",
   "functions": {
     "api/master.py": {
-      "runtime": "vercel-python@4.1.0",
+      "runtime": "vercel-python",
       "memory": 1024,
       "maxDuration": 300
+    },
+    "api/**/*.php": {
+      "runtime": "vercel-php@0.6.0"
     }
   }
 }
