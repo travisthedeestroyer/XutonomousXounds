@@ -4,7 +4,7 @@
   "outputDirectory": "dist",
   "functions": {
     "api/master.py": {
-      "runtime": "python3.12",
+      "runtime": "vercel-python@4.1.0",
       "memory": 1024,
       "maxDuration": 300
     }
