@@ -538,59 +538,91 @@ export default function App() {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
+      // Step 1: request mic FIRST — this triggers the Bluetooth A2DP→HFP profile
+      // switch before we create the AudioContext or set any sinkId.
+      const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: selectedInputId !== 'default' ? { exact: selectedInputId } : undefined,
           echoCancellation: useEchoCancellation,
           noiseSuppression: useEchoCancellation,
           autoGainControl: useEchoCancellation
-        } 
+        }
       });
       streamRef.current = stream;
-      
-      // Set up Audio Context for Visualizer and Playback
+
+      // Step 2: re-enumerate devices now that Bluetooth may have switched profiles,
+      // so selectedOutputId reflects the current device state.
+      await fetchDevices();
+
+      // Step 3: create AudioContext AFTER the profile switch.
       const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
       if (!AudioContextClass) throw new Error("AudioContext not supported");
       const audioCtx = new AudioContextClass();
       audioCtxRef.current = audioCtx;
 
+      // Step 4: point the AudioContext to the chosen output device.
+      // This is the single source of truth for ALL audio — beat, vocal, metronome, monitor.
       if (selectedOutputId !== 'default' && typeof (audioCtx as any).setSinkId === 'function') {
         try {
           await (audioCtx as any).setSinkId(selectedOutputId);
         } catch(e) {
-          console.warn("Browser does not support AudioContext setSinkId", e);
+          console.warn("setSinkId failed, falling back to default output:", e);
+          // Device may have changed ID after Bluetooth switch — silently use default.
         }
       }
-      
+
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
 
+      // Step 5: analyser for the visualiser (mic source → analyser only, not destination).
       const source = audioCtx.createMediaStreamSource(stream);
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 128;
       source.connect(analyser);
       analyserRef.current = analyser;
 
-      // Resilient Playback via HTMLAudioElement (Protects against Sample Rate/Bluetooth Profile switches dropping playback)
-      if (beatAudioRef.current) {
+      // Step 6: play the beat through the AudioContext so it is guaranteed to use
+      // the same sinkId as everything else. AudioBuffers are context-agnostic and
+      // can be reused across contexts without re-decoding.
+      if (beatBuffer) {
+        const beatSource = audioCtx.createBufferSource();
+        beatSource.buffer = beatBuffer;
+        beatSource.loop = true;
+        const beatGain = audioCtx.createGain();
+        beatGain.gain.value = 0.8;
+        beatSource.connect(beatGain);
+        beatGain.connect(audioCtx.destination);
+        beatSource.start(0);
+        (audioCtx as any).beatSource = beatSource;
+      } else if (beatAudioRef.current) {
+        // Fallback when beatBuffer is unavailable (should be rare).
         try {
           if (selectedOutputId !== 'default' && typeof (beatAudioRef.current as any).setSinkId === 'function') {
             await (beatAudioRef.current as any).setSinkId(selectedOutputId);
           }
-        } catch(e) { console.warn("Sink error on beat:", e); }
+        } catch(e) { console.warn("Sink error on beat element:", e); }
         beatAudioRef.current.currentTime = 0;
         beatAudioRef.current.volume = 0.8;
         beatAudioRef.current.play().catch(e => console.error("Beat play error:", e));
       }
 
-      // Play Main Vocal if in backup mode
-      if (recordingMode === 'backup' && mainVocalAudioRef.current) {
+      // Step 7: play the main vocal through the AudioContext in backup mode.
+      if (recordingMode === 'backup' && mainVocalBuffer) {
+        const vocalSource = audioCtx.createBufferSource();
+        vocalSource.buffer = mainVocalBuffer;
+        const vocalGain = audioCtx.createGain();
+        vocalGain.gain.value = 0.6;
+        vocalSource.connect(vocalGain);
+        vocalGain.connect(audioCtx.destination);
+        vocalSource.start(0);
+        (audioCtx as any).vocalSource = vocalSource;
+      } else if (recordingMode === 'backup' && mainVocalAudioRef.current) {
         try {
           if (selectedOutputId !== 'default' && typeof (mainVocalAudioRef.current as any).setSinkId === 'function') {
             await (mainVocalAudioRef.current as any).setSinkId(selectedOutputId);
           }
-        } catch(e) { console.warn("Sink error on vocal:", e); }
+        } catch(e) { console.warn("Sink error on vocal element:", e); }
         mainVocalAudioRef.current.currentTime = 0;
         mainVocalAudioRef.current.volume = 0.6;
         mainVocalAudioRef.current.play().catch(e => console.error("Vocal play error:", e));
