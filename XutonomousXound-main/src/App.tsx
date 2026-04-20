@@ -538,138 +538,76 @@ export default function App() {
 
   const startRecording = async () => {
     try {
-      // Step 1: request mic FIRST — this triggers the Bluetooth A2DP→HFP profile
-      // switch before we create the AudioContext or set any sinkId.
+      // 1. Mic stream
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: selectedInputId !== 'default' ? { exact: selectedInputId } : undefined,
           echoCancellation: useEchoCancellation,
           noiseSuppression: useEchoCancellation,
-          autoGainControl: useEchoCancellation
+          autoGainControl: useEchoCancellation,
         }
       });
       streamRef.current = stream;
 
-      // Step 2: re-enumerate devices now that Bluetooth may have switched profiles,
-      // so selectedOutputId reflects the current device state.
-      await fetchDevices();
-
-      // Step 3: create AudioContext AFTER the profile switch.
-      const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) throw new Error("AudioContext not supported");
-      const audioCtx = new AudioContextClass();
-      audioCtxRef.current = audioCtx;
-
-      // Step 4: point the AudioContext to the chosen output device.
-      // This is the single source of truth for ALL audio — beat, vocal, metronome, monitor.
-      if (selectedOutputId !== 'default' && typeof (audioCtx as any).setSinkId === 'function') {
-        try {
-          await (audioCtx as any).setSinkId(selectedOutputId);
-        } catch(e) {
-          console.warn("setSinkId failed, falling back to default output:", e);
-          // Device may have changed ID after Bluetooth switch — silently use default.
-        }
-      }
-
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-      }
-
-      // Step 5: analyser for the visualiser (mic source → analyser only, not destination).
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 128;
-      source.connect(analyser);
-      analyserRef.current = analyser;
-
-      // Step 6: play the beat through the AudioContext so it is guaranteed to use
-      // the same sinkId as everything else. AudioBuffers are context-agnostic and
-      // can be reused across contexts without re-decoding.
-      if (beatBuffer) {
-        const beatSource = audioCtx.createBufferSource();
-        beatSource.buffer = beatBuffer;
-        beatSource.loop = true;
-        const beatGain = audioCtx.createGain();
-        beatGain.gain.value = 0.8;
-        beatSource.connect(beatGain);
-        beatGain.connect(audioCtx.destination);
-        beatSource.start(0);
-        (audioCtx as any).beatSource = beatSource;
-      } else if (beatAudioRef.current) {
-        // Fallback when beatBuffer is unavailable (should be rare).
-        try {
-          if (selectedOutputId !== 'default' && typeof (beatAudioRef.current as any).setSinkId === 'function') {
-            await (beatAudioRef.current as any).setSinkId(selectedOutputId);
-          }
-        } catch(e) { console.warn("Sink error on beat element:", e); }
+      // 2. Beat — plain <audio> element, browser routes to system default output.
+      //    No setSinkId, no AudioContext routing. Let the OS handle headphone delivery.
+      if (beatAudioRef.current) {
         beatAudioRef.current.currentTime = 0;
         beatAudioRef.current.volume = 0.8;
-        beatAudioRef.current.play().catch(e => console.error("Beat play error:", e));
+        beatAudioRef.current.play().catch(e => console.error('Beat play error:', e));
       }
 
-      // Step 7: play the main vocal through the AudioContext in backup mode.
-      if (recordingMode === 'backup' && mainVocalBuffer) {
-        const vocalSource = audioCtx.createBufferSource();
-        vocalSource.buffer = mainVocalBuffer;
-        const vocalGain = audioCtx.createGain();
-        vocalGain.gain.value = 0.6;
-        vocalSource.connect(vocalGain);
-        vocalGain.connect(audioCtx.destination);
-        vocalSource.start(0);
-        (audioCtx as any).vocalSource = vocalSource;
-      } else if (recordingMode === 'backup' && mainVocalAudioRef.current) {
-        try {
-          if (selectedOutputId !== 'default' && typeof (mainVocalAudioRef.current as any).setSinkId === 'function') {
-            await (mainVocalAudioRef.current as any).setSinkId(selectedOutputId);
-          }
-        } catch(e) { console.warn("Sink error on vocal element:", e); }
+      // 3. Backup vocal playback (same approach)
+      if (recordingMode === 'backup' && mainVocalAudioRef.current) {
         mainVocalAudioRef.current.currentTime = 0;
         mainVocalAudioRef.current.volume = 0.6;
-        mainVocalAudioRef.current.play().catch(e => console.error("Vocal play error:", e));
+        mainVocalAudioRef.current.play().catch(e => console.error('Vocal play error:', e));
       }
 
+      // 4. AudioContext — used only for the mic visualiser and optional monitor.
+      //    No sinkId. Destination = system default, same as the <audio> elements above.
+      const AudioContextClass = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) throw new Error('AudioContext not supported');
+      const audioCtx = new AudioContextClass();
+      audioCtxRef.current = audioCtx;
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+      const micSource = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 128;
+      micSource.connect(analyser);
+      analyserRef.current = analyser;
+
+      // 5. Mic monitor (headphone mode only — off when echo cancellation is on)
       if (useMonitor) {
         const monitorGain = audioCtx.createGain();
         monitorGain.gain.value = 0.5;
-        
         const reverb = audioCtx.createConvolver();
-        const sampleRate = audioCtx.sampleRate;
-        const length = Math.floor(sampleRate * 0.5);
-        const impulse = audioCtx.createBuffer(2, length, sampleRate);
-        for (let i = 0; i < 2; i++) {
-          const channelData = impulse.getChannelData(i);
-          for (let j = 0; j < length; j++) {
-            channelData[j] = (Math.random() * 2 - 1) * Math.pow(1 - j / length, 2);
-          }
+        const sr = audioCtx.sampleRate;
+        const impulse = audioCtx.createBuffer(2, Math.floor(sr * 0.5), sr);
+        for (let ch = 0; ch < 2; ch++) {
+          const d = impulse.getChannelData(ch);
+          for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2);
         }
         reverb.buffer = impulse;
-        
         const reverbGain = audioCtx.createGain();
         reverbGain.gain.value = 0.2;
-
-        source.connect(monitorGain);
+        micSource.connect(monitorGain);
         monitorGain.connect(audioCtx.destination);
-        
-        source.connect(reverb);
+        micSource.connect(reverb);
         reverb.connect(reverbGain);
         reverbGain.connect(audioCtx.destination);
       }
 
+      // 6. Metronome
       if (useMetronome && detectedBpm) {
         const interval = (60 / detectedBpm) * 1000;
-        metronomeIntervalRef.current = setInterval(() => {
-          playMetronomeTick(audioCtx);
-        }, interval);
+        metronomeIntervalRef.current = setInterval(() => playMetronomeTick(audioCtx), interval);
       }
-      
+
+      // 7. Recorder
       const recorder = new MediaRecorder(stream);
-      
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          audioChunks.current.push(e.data);
-        }
-      };
-      
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.current.push(e.data); };
       recorder.onstop = () => {
         const blob = new Blob(audioChunks.current);
         if (recordingMode === 'main') {
@@ -682,32 +620,20 @@ export default function App() {
           setBackupVocalUrl(URL.createObjectURL(blob));
         }
         audioChunks.current = [];
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-        }
-        if (audioCtxRef.current) {
-          audioCtxRef.current.close();
-        }
-        if (animationRef.current) {
-          cancelAnimationFrame(animationRef.current);
-        }
+        streamRef.current?.getTracks().forEach(t => t.stop());
+        audioCtxRef.current?.close();
+        if (animationRef.current) cancelAnimationFrame(animationRef.current);
       };
-      
       audioChunks.current = [];
       recorder.start();
       mediaRecorderRef.current = recorder;
       setIsRecording(true);
-      
-      // Start visualizer
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
       setTimeout(drawVisualizer, 100);
-      
-      // We now play beat and vocal through AudioContext for better sync and Bluetooth support
+
     } catch (err) {
-      console.error("Error accessing microphone", err);
-      alert("Could not access microphone. Please ensure permissions are granted.");
+      console.error('Recording error:', err);
+      alert('Could not start recording. Please check microphone permissions.');
     }
   };
 
@@ -733,28 +659,14 @@ export default function App() {
     if (mediaRecorderRef.current && isRecording) {
       mediaRecorderRef.current.stop();
       setIsRecording(false);
-      
       if (beatAudioRef.current) {
         beatAudioRef.current.pause();
         beatAudioRef.current.currentTime = 0;
       }
-
       if (mainVocalAudioRef.current) {
         mainVocalAudioRef.current.pause();
         mainVocalAudioRef.current.currentTime = 0;
       }
-
-      // Stop AudioContext sources
-      const audioCtx = audioCtxRef.current as any;
-      if (audioCtx) {
-        if (audioCtx.beatSource) {
-          try { audioCtx.beatSource.stop(); } catch(e) {}
-        }
-        if (audioCtx.vocalSource) {
-          try { audioCtx.vocalSource.stop(); } catch(e) {}
-        }
-      }
-      
       setStep('mix');
     }
   };
