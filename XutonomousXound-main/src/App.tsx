@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Mic, Square, Settings2, Download, Music, Loader2, Volume2, Waves, RotateCcw, Sparkles, Bot, CheckCircle2, Flame, Play, Layers, FastForward, Activity, Sliders, Ear, AlertTriangle, X, SplitSquareHorizontal, FileText, Wand2, Minimize2, History, Headphones } from 'lucide-react';
+import { Upload, Mic, Square, Settings2, Download, Music, Loader2, Volume2, Waves, RotateCcw, Sparkles, Bot, CheckCircle2, Flame, Play, Layers, FastForward, Activity, Sliders, Ear, AlertTriangle, X, SplitSquareHorizontal, FileText, Wand2, Minimize2, History, Headphones, Key, ChevronRight } from 'lucide-react';
 import { GoogleGenAI } from "@google/genai";
 import { mixAudio, processBeat, MixSettings, defaultMixSettings, masterAudio } from './lib/audioUtils';
 import { runAIAgentNetwork, AILog } from './lib/aiMixer';
@@ -73,6 +73,11 @@ export default function App() {
   const [hasApiKey, setHasApiKey] = useState(true);
   const [customApiKey, setCustomApiKey] = useState('');
   const [manualKeyInput, setManualKeyInput] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsKeyInput, setSettingsKeyInput] = useState('');
+  const [showApiKeyTooltip, setShowApiKeyTooltip] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [step, setStep] = useState<'upload' | 'prepare' | 'record' | 'mix' | 'result'>('upload');
   const [isMobile, setIsMobile] = useState(false);
   const [isSmallMobile, setIsSmallMobile] = useState(false);
@@ -108,10 +113,13 @@ export default function App() {
     }
   };
 
+  const [isLargeScreen, setIsLargeScreen] = useState(false);
+
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768);
       setIsSmallMobile(window.innerWidth < 400);
+      setIsLargeScreen(window.innerWidth >= 1200);
     };
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -271,6 +279,40 @@ export default function App() {
     navigator.mediaDevices.addEventListener('devicechange', fetchDevices);
     return () => navigator.mediaDevices.removeEventListener('devicechange', fetchDevices);
   }, []);
+
+  // Show API key tooltip on upload step when no key is configured
+  useEffect(() => {
+    if (step === 'upload' && !customApiKey) {
+      const t = setTimeout(() => setShowApiKeyTooltip(true), 1500);
+      return () => clearTimeout(t);
+    } else {
+      setShowApiKeyTooltip(false);
+    }
+  }, [step, customApiKey]);
+
+  // Recording timer
+  useEffect(() => {
+    if (isRecording) {
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds(s => s + 1);
+      }, 1000);
+    } else {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+    }
+    return () => {
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    };
+  }, [isRecording]);
+
+  const formatRecordingTime = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  };
 
   // Auto-scroll lyrics during recording
   useEffect(() => {
@@ -799,6 +841,169 @@ export default function App() {
 
   return (
     <>
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowSettings(false); }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: 'spring', damping: 20 }}
+              className="bg-zinc-900 border border-white/10 p-8 rounded-3xl max-w-md w-full shadow-2xl flex flex-col gap-6"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                    <Settings2 className="w-5 h-5 text-white/80" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold uppercase tracking-widest text-white">Settings</h2>
+                    <p className="text-[10px] text-white/30 uppercase tracking-widest mt-0.5">Configuration</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowSettings(false)} className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center transition-colors">
+                  <X className="w-4 h-4 text-white/60" />
+                </button>
+              </div>
+
+              {/* API Key Section */}
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-white/40">
+                  <Key className="w-3 h-3" /> Gemini API Key
+                </div>
+
+                {customApiKey ? (
+                  <div className="flex items-center gap-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4">
+                    <CheckCircle2 className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-amber-300">Custom Key Active</p>
+                      <p className="text-[10px] text-white/40 font-mono truncate mt-0.5">{'•'.repeat(8) + customApiKey.slice(-6)}</p>
+                    </div>
+                    <button
+                      onClick={() => { setCustomApiKey(''); setHasApiKey(false); setSettingsKeyInput(''); }}
+                      className="text-[10px] text-rose-400 hover:text-rose-300 font-bold uppercase tracking-widest whitespace-nowrap"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl p-4">
+                    <AlertTriangle className="w-4 h-4 text-white/30 flex-shrink-0" />
+                    <p className="text-[10px] text-white/40">No custom key set. Using AI Studio if available.</p>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleSelectKey}
+                  className="w-full py-3 bg-white/10 hover:bg-white/15 text-white font-bold rounded-xl transition-colors uppercase tracking-widest text-xs border border-white/10 flex items-center justify-center gap-2"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-400" /> Select via AI Studio
+                </button>
+
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 border-t border-white/10" />
+                  <span className="text-[10px] uppercase tracking-widest text-white/20 font-bold">or paste manually</span>
+                  <div className="flex-1 border-t border-white/10" />
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="password"
+                    value={settingsKeyInput}
+                    onChange={(e) => setSettingsKeyInput(e.target.value)}
+                    placeholder="AIza..."
+                    className="flex-1 min-w-0 bg-black/50 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/20 outline-none focus:border-amber-500/50 transition-colors"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && settingsKeyInput.trim()) {
+                        setCustomApiKey(settingsKeyInput.trim());
+                        setHasApiKey(true);
+                        setSettingsKeyInput('');
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (settingsKeyInput.trim()) {
+                        setCustomApiKey(settingsKeyInput.trim());
+                        setHasApiKey(true);
+                        setSettingsKeyInput('');
+                      }
+                    }}
+                    disabled={!settingsKeyInput.trim()}
+                    className="px-5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 text-black font-bold rounded-xl transition-colors uppercase tracking-widest text-xs whitespace-nowrap"
+                  >
+                    Save
+                  </button>
+                </div>
+
+                <p className="text-[10px] text-white/25 leading-relaxed text-center">
+                  Get a free key at{' '}
+                  <span className="text-white/40 font-mono">aistudio.google.com</span>.
+                  Keys are stored in memory only and never sent to our servers.
+                </p>
+              </div>
+
+              {/* Audio I/O section */}
+              <div className="flex flex-col gap-4 border-t border-white/5 pt-6">
+                <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-white/40">
+                  <Volume2 className="w-3 h-3" /> Audio Devices
+                </div>
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[9px] font-mono uppercase tracking-wider text-emerald-400/80">Input (Microphone)</label>
+                    <select
+                      value={selectedInputId}
+                      onChange={e => setSelectedInputId(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500/50 appearance-none cursor-pointer hover:bg-white/10 transition-colors"
+                    >
+                      <option className="bg-zinc-900 text-white" value="default">System Default</option>
+                      {audioInputs.map(d => (
+                        <option className="bg-zinc-900 text-white" key={d.deviceId} value={d.deviceId}>{d.label || `Microphone (${d.deviceId.slice(0, 6)}...)`}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-[9px] font-mono uppercase tracking-wider text-rose-400/80">Output (Headphones / Speakers)</label>
+                    <select
+                      value={selectedOutputId}
+                      onChange={e => setSelectedOutputId(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-rose-500/50 appearance-none cursor-pointer hover:bg-white/10 transition-colors"
+                    >
+                      <option className="bg-zinc-900 text-white" value="default">System Default</option>
+                      {audioOutputs.map(d => (
+                        <option className="bg-zinc-900 text-white" key={d.deviceId} value={d.deviceId}>{d.label || `Speaker (${d.deviceId.slice(0, 6)}...)`}</option>
+                      ))}
+                    </select>
+                    <p className="text-[8px] uppercase tracking-widest text-white/20 italic">Output routing works best on desktop Chrome / Edge.</p>
+                  </div>
+                  {audioInputs.some(d => !d.label) && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+                          await fetchDevices();
+                          s.getTracks().forEach(t => t.stop());
+                        } catch (e) {}
+                      }}
+                      className="text-[10px] uppercase tracking-widest font-bold bg-white/5 border border-white/10 hover:bg-white/10 text-white/60 py-2.5 rounded-xl transition-colors"
+                    >
+                      Enable Detailed Device Names
+                    </button>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {!hasApiKey && (
         <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-xl flex items-center justify-center p-4">
           <div className="bg-zinc-900 border border-white/10 p-8 rounded-3xl max-w-md w-full shadow-2xl flex flex-col items-center text-center">
@@ -896,7 +1101,7 @@ export default function App() {
 
       {/* Header */}
       <header className="fixed top-8 left-8 right-8 flex items-center justify-between z-50 pointer-events-none">
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           className="flex items-center gap-3 pointer-events-auto"
@@ -908,14 +1113,57 @@ export default function App() {
             Vocal Studio Pro
           </h1>
         </motion.div>
-        
-        <motion.div 
+
+        <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
-          className="flex items-center gap-2 text-[10px] font-mono text-white/40 bg-white/5 px-4 py-2 rounded-full border border-white/10 backdrop-blur-md pointer-events-auto"
+          className="flex items-center gap-3 pointer-events-auto"
         >
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          SYSTEM ONLINE
+          <div className="flex items-center gap-2 text-[10px] font-mono text-white/40 bg-white/5 px-4 py-2 rounded-full border border-white/10 backdrop-blur-md">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            SYSTEM ONLINE
+          </div>
+
+          {/* Settings Button with API Key Tooltip */}
+          <div className="relative">
+            <button
+              onClick={() => { setShowSettings(true); setShowApiKeyTooltip(false); }}
+              className={`w-10 h-10 rounded-full backdrop-blur-md flex items-center justify-center border shadow-xl transition-all hover:scale-110 ${customApiKey ? 'bg-amber-500/20 border-amber-500/40 text-amber-400' : 'bg-white/5 border-white/10 text-white/60 hover:text-white/90 hover:bg-white/10'}`}
+              title="API Settings"
+            >
+              <Settings2 className="w-4 h-4" />
+              {customApiKey && (
+                <span className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-amber-400 border-2 border-[#050505]" />
+              )}
+            </button>
+
+            {/* Tooltip: directs user to configure API key */}
+            <AnimatePresence>
+              {showApiKeyTooltip && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                  className="absolute top-14 right-0 w-56 bg-zinc-900 border border-amber-500/30 rounded-2xl p-4 shadow-2xl shadow-amber-500/10 pointer-events-auto"
+                >
+                  <div className="absolute -top-2 right-3 w-4 h-4 bg-zinc-900 border-l border-t border-amber-500/30 rotate-45" />
+                  <div className="flex items-start gap-3">
+                    <Key className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                    <div>
+                      <p className="text-xs font-bold text-white mb-1">API Key Required</p>
+                      <p className="text-[10px] text-white/50 leading-relaxed">Configure your Gemini API key to unlock AI mixing & mastering.</p>
+                      <button
+                        onClick={() => { setShowSettings(true); setShowApiKeyTooltip(false); }}
+                        className="mt-2 flex items-center gap-1 text-[10px] font-bold text-amber-400 hover:text-amber-300 uppercase tracking-widest"
+                      >
+                        Open Settings <ChevronRight className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
         </motion.div>
       </header>
 
@@ -988,9 +1236,9 @@ export default function App() {
               </motion.div>
 
               {/* Orbiting Controls */}
-              <motion.div 
+              <motion.div
                 initial={{ x: 0, y: 0, opacity: 0 }}
-                animate={{ x: isMobile ? 0 : -280, y: isMobile ? (isSmallMobile ? -160 : -180) : 0, opacity: 1 }}
+                animate={{ x: isMobile ? 0 : -280, y: isMobile ? (isSmallMobile ? -140 : -160) : 0, opacity: 1 }}
                 exit={{ x: 0, y: 0, opacity: 0 }}
                 transition={{ type: "spring", damping: 15 }}
                 className={`absolute z-20 ${isMobile ? (isSmallMobile ? 'w-[90vw]' : 'w-72') : 'w-64'} flex flex-col gap-4 bg-black/40 backdrop-blur-2xl border border-white/10 p-6 rounded-[2rem] shadow-2xl pointer-events-auto`}
@@ -1022,9 +1270,9 @@ export default function App() {
                 </motion.div>
               )}
               {/* Lyrics Panel */}
-              <motion.div 
+              <motion.div
                 initial={{ y: 300, opacity: 0 }}
-                animate={{ y: isMobile ? (isSmallMobile ? 240 : 280) : 320, opacity: 1 }}
+                animate={{ y: isMobile ? (isSmallMobile ? 195 : 225) : 290, opacity: 1 }}
                 exit={{ y: 300, opacity: 0 }}
                 transition={{ type: "spring", damping: 15, delay: 0.2 }}
                 className={`absolute z-20 ${isMobile ? (isSmallMobile ? 'w-[90vw]' : 'w-80') : 'w-96'} bg-black/40 backdrop-blur-2xl border border-white/10 p-6 rounded-[2rem] shadow-2xl pointer-events-auto flex flex-col gap-4`}
@@ -1094,12 +1342,12 @@ export default function App() {
               </motion.div>
 
               {/* Orbiting Toggle */}
-              <motion.div 
+              <motion.div
                 initial={{ y: 0, opacity: 0 }}
-                animate={{ y: isMobile ? 180 : 220, opacity: 1 }}
+                animate={{ y: isMobile ? (isSmallMobile ? 155 : 170) : 210, opacity: 1 }}
                 exit={{ y: 0, opacity: 0 }}
                 transition={{ type: "spring", damping: 15 }}
-                className="absolute z-20 flex flex-col gap-4 pointer-events-auto"
+                className="absolute z-20 flex flex-col gap-3 pointer-events-auto"
               >
                 <div className="flex bg-black/40 backdrop-blur-2xl p-1.5 rounded-2xl border border-white/10 shadow-2xl relative group">
                   <button 
@@ -1233,9 +1481,9 @@ export default function App() {
                 </div>
               </motion.div>
               
-              <motion.div 
+              <motion.div
                 initial={{ y: 0, opacity: 0 }}
-                animate={{ y: isMobile ? -180 : -220, opacity: 1 }}
+                animate={{ y: isMobile ? (isSmallMobile ? -155 : -165) : -210, opacity: 1 }}
                 exit={{ y: 0, opacity: 0 }}
                 transition={{ type: "spring", damping: 15, delay: 0.1 }}
                 className="absolute z-20 text-center pointer-events-auto"
@@ -1244,7 +1492,7 @@ export default function App() {
                   {recordingMode === 'main' ? 'Vocal Tracking' : 'Backup Tracking'}
                 </h2>
                 <div className={`text-[10px] font-mono px-4 py-1.5 rounded-full border inline-block ${isRecording ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' : 'bg-white/5 border-white/10 text-white/40'}`}>
-                  {isRecording ? 'REC ● 00:00:00' : 'READY TO RECORD'}
+                  {isRecording ? `REC ● ${formatRecordingTime(recordingSeconds)}` : 'READY TO RECORD'}
                 </div>
 
                 {!showLyrics && (
@@ -1290,11 +1538,11 @@ export default function App() {
               {/* Left Flank: Sliders */}
               <AnimatePresence>
                 {(!isMobile || mobileMixPanel === 'console') && (
-                  <motion.div 
+                  <motion.div
                     initial={{ x: isMobile ? 0 : -100, y: isMobile ? 50 : 0, opacity: 0 }}
-                    animate={{ x: isMobile ? 0 : -380, y: isMobile ? 0 : 0, scale: 1, opacity: 1 }}
+                    animate={{ x: isMobile ? 0 : (isLargeScreen ? -380 : -310), y: isMobile ? 0 : 0, scale: 1, opacity: 1 }}
                     exit={{ x: isMobile ? 0 : -100, y: isMobile ? 50 : 0, opacity: 0 }}
-                    className={`absolute z-40 ${isMobile ? (isSmallMobile ? 'w-[92vw]' : 'w-80') : 'w-80'} bg-black/80 backdrop-blur-3xl border border-white/10 p-6 rounded-[2rem] shadow-2xl flex flex-col gap-6 max-h-[80vh] overflow-y-auto no-scrollbar pointer-events-auto ${isMobile ? 'h-[70vh] pb-20' : ''}`}
+                    className={`absolute z-40 ${isMobile ? (isSmallMobile ? 'w-[92vw]' : 'w-80') : (isLargeScreen ? 'w-80' : 'w-72')} bg-black/80 backdrop-blur-3xl border border-white/10 p-6 rounded-[2rem] shadow-2xl flex flex-col gap-6 max-h-[80vh] overflow-y-auto no-scrollbar pointer-events-auto ${isMobile ? 'h-[70vh] pb-20' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div>
@@ -1349,11 +1597,11 @@ export default function App() {
               {/* Right Flank: AI Terminal */}
               <AnimatePresence>
                 {(!isMobile || mobileMixPanel === 'ai') && (
-                  <motion.div 
+                  <motion.div
                     initial={{ x: isMobile ? 0 : 100, y: isMobile ? 50 : 0, opacity: 0 }}
-                    animate={{ x: isMobile ? 0 : 380, y: isMobile ? 0 : 0, scale: 1, opacity: 1 }}
+                    animate={{ x: isMobile ? 0 : (isLargeScreen ? 380 : 310), y: isMobile ? 0 : 0, scale: 1, opacity: 1 }}
                     exit={{ x: isMobile ? 0 : 100, y: isMobile ? 50 : 0, opacity: 0 }}
-                    className={`absolute z-40 ${isMobile ? (isSmallMobile ? 'w-[92vw]' : 'w-80') : 'w-80'} bg-black/80 backdrop-blur-3xl border border-white/10 p-6 rounded-[2rem] shadow-2xl flex flex-col gap-4 max-h-[80vh] pointer-events-auto ${isMobile ? 'h-[70vh] pb-20' : ''}`}
+                    className={`absolute z-40 ${isMobile ? (isSmallMobile ? 'w-[92vw]' : 'w-80') : (isLargeScreen ? 'w-80' : 'w-72')} bg-black/80 backdrop-blur-3xl border border-white/10 p-6 rounded-[2rem] shadow-2xl flex flex-col gap-4 max-h-[80vh] pointer-events-auto ${isMobile ? 'h-[70vh] pb-20' : ''}`}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <div>
@@ -1425,9 +1673,9 @@ export default function App() {
 
           {/* STEP 4: RESULT */}
           {step === 'result' && mixedUrl && (
-            <motion.div key="result" className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="flex flex-col items-center gap-8 w-full max-w-5xl px-6 relative">
-                
+            <motion.div key="result" className="absolute inset-0 overflow-y-auto pointer-events-none">
+              <div className="min-h-full flex flex-col items-center gap-6 w-full max-w-4xl mx-auto px-4 sm:px-6 pt-28 pb-36 relative">
+
                 {/* Main Content */}
                 <motion.div
                   initial={{ scale: 0.9, opacity: 0 }}
@@ -1518,37 +1766,40 @@ export default function App() {
                   </div>
                 </motion.div>
 
-                {/* Side Panel: Reference Mastering */}
-                <motion.div 
-                  initial={{ x: 100, opacity: 0 }}
-                  animate={{ x: isMobile ? 0 : 480, y: isMobile ? 320 : 0, opacity: 1 }}
-                  className="absolute z-20 w-64 bg-black/40 backdrop-blur-2xl border border-white/10 p-6 rounded-[2rem] shadow-2xl pointer-events-auto flex flex-col gap-4"
+                {/* Reference Mastering Panel — inline on all screens */}
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.15 }}
+                  className="w-full bg-black/40 backdrop-blur-2xl border border-white/10 p-6 rounded-[2rem] shadow-2xl pointer-events-auto flex flex-col gap-4"
                 >
                   <h3 className="text-xs font-bold uppercase tracking-widest text-white/80 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-amber-400" /> AI Mastering
+                    <Sparkles className="w-4 h-4 text-amber-400" /> Reference Mastering
                   </h3>
-                  <label className="flex flex-col items-center justify-center w-full h-24 rounded-xl bg-white/5 border border-white/10 border-dashed cursor-pointer hover:bg-white/10 transition-all">
-                    <Upload className="w-6 h-6 text-white/50 mb-2" />
-                    <span className="text-[10px] font-mono text-white/50">
-                      {referenceBlob ? 'Reference Loaded' : 'Upload Reference'}
-                    </span>
-                    <input type="file" accept="audio/*" onChange={(e) => {
-                      if (e.target.files && e.target.files[0]) {
-                        setReferenceBlob(e.target.files[0]);
-                      }
-                    }} className="hidden" />
-                  </label>
-                  
-                  <button 
-                    onClick={handleMastering}
-                    disabled={!referenceBlob || isMastering}
-                    className="w-full py-3 px-4 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                  >
-                    {isMastering ? <Loader2 className="w-4 h-4 animate-spin text-amber-400" /> : <Layers className="w-4 h-4 text-amber-400" />}
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
-                      {isMastering ? 'Mastering...' : 'Match Reference'}
-                    </span>
-                  </button>
+                  <p className="text-[10px] text-white/40 leading-relaxed">Upload a reference track to spectral-match your master to a professional sound.</p>
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <label className="flex-1 flex flex-col items-center justify-center h-20 rounded-xl bg-white/5 border border-white/10 border-dashed cursor-pointer hover:bg-white/10 transition-all">
+                      <Upload className="w-5 h-5 text-white/50 mb-1.5" />
+                      <span className="text-[10px] font-mono text-white/50">
+                        {referenceBlob ? '✓ Reference Loaded' : 'Upload Reference Track'}
+                      </span>
+                      <input type="file" accept="audio/*" onChange={(e) => {
+                        if (e.target.files && e.target.files[0]) {
+                          setReferenceBlob(e.target.files[0]);
+                        }
+                      }} className="hidden" />
+                    </label>
+                    <button
+                      onClick={handleMastering}
+                      disabled={isMastering}
+                      className="flex-1 py-3 px-4 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded-xl flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                    >
+                      {isMastering ? <Loader2 className="w-4 h-4 animate-spin text-amber-400" /> : <Layers className="w-4 h-4 text-amber-400" />}
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400">
+                        {isMastering ? 'Mastering...' : referenceBlob ? 'Match Reference' : 'Re-Master (Auto)'}
+                      </span>
+                    </button>
+                  </div>
                 </motion.div>
               </div>
             </motion.div>
